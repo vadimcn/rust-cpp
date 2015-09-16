@@ -7,13 +7,21 @@ use std::io::prelude::*;
 use std::fs::File;
 use std::ffi::OsString;
 
+use syntax::ast;
 use syntax::ast::Expr;
 use syntax::ast::Expr_::*;
 use syntax::ptr::P;
 use syntax::diagnostic;
+use syntax::visit;
+use syntax::attr::AttrMetaMethods;
 
 use rustc::lint::*;
+use rustc::session::Session;
 use rustc::session::search_paths::SearchPaths;
+use rustc::middle::ty;
+use rustc::middle::subst::{self, Subst};
+use rustc::middle::def;
+use rustc::middle::def_id;
 
 use gcc;
 
@@ -46,70 +54,73 @@ fn super_hack_get_out_dir() -> OsString {
 ///
 /// For example, #[repr(C)] structs could have an equivalent type definition generated in
 /// the C++ side, which could allow for some nicer interaction with the captured values.
-pub struct CppLintPass;
-impl LintPass for CppLintPass {
-    fn get_lints(&self) -> LintArray {
-        lint_array!(types::BAD_CXX_TYPE)
-    }
+// pub struct CppLintPass;
+// impl LintPass for CppLintPass {
+//     fn get_lints(&self) -> LintArray {
+//         lint_array!(types::BAD_CXX_TYPE)
+//     }
 
-    fn check_expr(&mut self, cx: &Context, exp: &Expr) {
-        if let ExprCall(ref callee, ref args) = exp.node {
-            if let ExprPath(None, ref path) = callee.node {
-                if path.segments.len() == 1 {
-                    let name = path.segments[0].identifier.name;
+//     fn check_expr(&mut self, cx: &Context, exp: &Expr) {
+//         if let ExprCall(ref callee, ref args) = exp.node {
+//             println!("### ExprCall {:?} {:?}", callee, args);
+//             if let ExprPath(None, ref path) = callee.node {
+//                 println!("### call name {}", path);
+//                 if path.segments.len() == 1 {
+//                     let name = path.segments[0].identifier.name;
+//                     println!("### call name2 {}", name);
 
-                    record_type_data(cx, &name.as_str(), exp, args);
-                }
-            }
-        }
-    }
-}
+//                     record_type_data(cx, &name.as_str(), exp, args);
+//                 }
+//             }
+//         }
+//     }
+// }
 
-fn record_type_data(cx: &Context, name: &str, call: &Expr, args: &[P<Expr>]) {
-    let mut headers = CPP_HEADERS.lock().unwrap();
-    let mut decls = CPP_FNDECLS.lock().unwrap();
-    let mut types = CPP_TYPEDATA.lock().unwrap();
+// fn record_type_data(cx: &Context, name: &str, call: &Expr, args: &[P<Expr>]) {
+//     let mut headers = CPP_HEADERS.lock().unwrap();
+//     let mut decls = CPP_FNDECLS.lock().unwrap();
+//     let mut types = CPP_TYPEDATA.lock().unwrap();
 
-    if let Some(cppfn) = decls.get_mut(name) {
-        cppfn.ret_ty = Some(types::cpp_type_of(&mut types, cx.tcx, call, false)
-                            .with_note(format!("Used in the return value of this cpp! block"),
-                                       Some(cppfn.span))
-                            .into_name(cx));
+//     if let Some(cppfn) = decls.get_mut(name) {
+//         cppfn.ret_ty = Some(types::cpp_type_of(&mut types, cx.tcx, call, false)
+//                             .with_note(format!("Used in the return value of this cpp! block"),
+//                                        Some(cppfn.span))
+//                             .into_name(cx));
 
-        for (i, arg) in args.iter().enumerate() {
-            // Strip the two casts off
-            if let ExprCast(ref e, _) = arg.node {
-                if let ExprCast(ref e, _) = e.node {
-                    if let ExprAddrOf(_, ref e) = e.node {
-                        let mut tn = types::cpp_type_of(&mut types, cx.tcx, e, true)
-                            .with_note(format!("Used in the argument `{}` of this cpp! block",
-                                               cppfn.arg_idents[i].name), Some(cppfn.span));
-                        tn.recover(); // We are in a reference, so we shouldn't error
-                        cppfn.arg_idents[i].ty = Some(tn.into_name(cx));
+//         for (i, arg) in args.iter().enumerate() {
+//             // Strip the two casts off
+//             if let ExprCast(ref e, _) = arg.node {
+//                 if let ExprCast(ref e, _) = e.node {
+//                     if let ExprAddrOf(_, ref e) = e.node {
+//                         let mut tn = types::cpp_type_of(&mut types, cx.tcx, e, true)
+//                             .with_note(format!("Used in the argument `{}` of this cpp! block",
+//                                                cppfn.arg_idents[i].name), Some(cppfn.span));
+//                         tn.recover(); // We are in a reference, so we shouldn't error
+//                         cppfn.arg_idents[i].ty = Some(tn.into_name(cx));
 
-                        continue
-                    }
-                }
-            }
+//                         continue
+//                     }
+//                 }
+//             }
 
-            panic!("Expected a double-casted reference as an argument.")
-        }
-    } else { return }
+//             panic!("Expected a double-casted reference as an argument.")
+//         }
+//     } else { return }
 
-    // We've processed all of them!
-    // Finalize!
-    if decls.values().all(|x| x.ret_ty.is_some()) {
-        cx.sess().abort_if_errors();
-        finalize(cx, &mut headers, &mut types, &mut decls);
-    }
-}
+//     // We've processed all of them!
+//     // Finalize!
+//     if decls.values().all(|x| x.ret_ty.is_some()) {
+//         sess.abort_if_errors();
+//         finalize(cx, &mut headers, &mut types, &mut decls);
+//     }
+// }
 
-fn finalize(cx: &Context,
+fn finalize(tcx: &ty::ctxt,
             headers: &mut String,
             types: &mut types::TypeData,
             decls: &mut HashMap<String, CppFn>) {
     let fndecls = decls.values().fold(String::new(), |acc, new| {
-        format!("{}\n{}\n", acc, new.to_string(cx.sess()))
+        format!("{}\n{}\n", acc, new.to_string(&tcx.sess))
     });
 
     let cppcode = format!(r#"
@@ -178,7 +189,7 @@ namespace rs {{
 
 /* User-generated function declarations */
 extern "C" {{{}}}
-"#, cx.sess().target.uint_type, cx.sess().target.int_type, *headers, types.to_cpp(cx), fndecls);
+"#, tcx.sess.target.uint_type, tcx.sess.target.int_type, *headers, types.to_cpp(tcx), fndecls);
 
     // Get the output directory, which is _way_ harder than I was expecting,
     // (also super hacky).
@@ -201,7 +212,7 @@ extern "C" {{{}}}
     // The rustc backend hasn't read from this object into it's own internal storage
     // for linking yet, so this change will be read and used in the linking phase.
     unsafe {
-        let sp = &cx.sess().opts.search_paths;
+        let sp = &tcx.sess.opts.search_paths;
         let sp_mut: &mut SearchPaths = &mut *(sp as *const _ as *mut _);
         sp_mut.add_path(&out_dir.to_str().unwrap(), diagnostic::ColorConfig::Never);
     }
@@ -209,9 +220,9 @@ extern "C" {{{}}}
     // I didn't want to write my own compiler driver-driver, so I'm using gcc.
     // Unfortuantely, it expects to be run within a cargo build script, so I'm going
     // to set a bunch of environment variables to trick it into not crashing
-    env::set_var("TARGET", &cx.sess().target.target.llvm_target);
-    env::set_var("HOST", &cx.sess().host.llvm_target);
-    env::set_var("OPT_LEVEL", format!("{}", cx.sess().opts.cg.opt_level.unwrap_or(0)));
+    env::set_var("TARGET", &tcx.sess.target.target.llvm_target);
+    env::set_var("HOST", &tcx.sess.host.llvm_target);
+    env::set_var("OPT_LEVEL", format!("{}", tcx.sess.opts.cg.opt_level.unwrap_or(0)));
     env::set_var("CARGO_MANIFEST_DIR", &out_dir);
     env::set_var("OUT_DIR", &out_dir);
     env::set_var("PROFILE", "");
@@ -224,4 +235,133 @@ extern "C" {{{}}}
         .file("rust_cpp_tmp.cpp")
         .compile("librust_cpp_tmp.a");
     println!("########### Done Rust-C++ ############");
+}
+
+pub struct CppCodegenPass;
+
+impl CodegenPass for CppCodegenPass {
+    fn run<'tcx>(&mut self, tcx: &ty::ctxt<'tcx>, monos: &Monomorphizations<'tcx>) {
+        println!("CppCodegenPass::run()");
+        println!("### monos {:?}", monos);
+        let mut cg = CppCodegenVisitor {
+            tcx: tcx,
+            monos: monos,
+            type_data: types::TypeData::new(),
+            fn_decls: HashMap::new(),
+        };
+        visit::walk_crate(&mut cg, tcx.map.krate());
+
+        let mut headers = CPP_HEADERS.lock().unwrap();
+      
+        finalize(tcx, &mut headers, &mut cg.type_data, &mut cg.fn_decls);
+    }
+}
+
+pub struct CppCodegenVisitor<'a, 'tcx:'a> {
+    tcx: &'a ty::ctxt<'tcx>,
+    monos: &'a Monomorphizations<'tcx>,
+    type_data: types::TypeData,
+    fn_decls: HashMap<String, CppFn>,
+}
+
+impl<'v,'a,'tcx> visit::Visitor<'v> for CppCodegenVisitor<'a, 'tcx> {
+    /*
+    fn visit_expr(&mut self, exp: &'v Expr) {
+        if let ExprCall(ref callee, ref args) = exp.node {
+            if let def::DefFn(defid, _) = self.tcx.resolve_expr(callee) {
+                println!("### defid {:?}", defid);
+                if let Some(psets) = self.monos.get(&defid) {
+                    println!("### psets {:?}", psets);
+                    for pset in psets.iter() {
+                        let fn_ty = self.tcx.node_id_to_type(defid.node);
+                        // Monomorphize function type
+                        let substs = subst::Substs {
+                            types: (*pset).clone(),
+                            regions: subst::RegionSubsts::ErasedRegions,
+                        };
+                        let mono_fn_ty = fn_ty.subst(self.tcx, &substs);
+                        println!("### fn_ty {:?} / mono_fn_ty {:?}", fn_ty, mono_fn_ty);                 
+                    }
+                }
+            }
+        }
+        visit::walk_expr(self, exp)
+    }
+    */
+
+    fn visit_foreign_item(&mut self, fi: &'v ast::ForeignItem) {
+        if let ast::ForeignItemFn(ref fn_decl, _) = fi.node {
+            let wrapper_attr = fi.attrs.iter().find(|a| a.check_name("cpp_wrapper"));
+            if let Some(wrapper_attr) = wrapper_attr {
+                let body = get_meta_value_str(wrapper_attr, "body")
+                                .expect("#[cpp_wrapper(body=...)]");
+                let fn_ty = self.tcx.node_id_to_type(fi.id);
+
+                let defid = def_id::DefId::local(fi.id);
+                if let Some(m) = self.monos.get(&defid) {
+                    for &(ref symbol, pset) in m.iter() {
+                        let substs = subst::Substs {
+                            types: (*pset).clone(),
+                            regions: subst::RegionSubsts::ErasedRegions,
+                        };
+
+                        println!("### fn_ty {:?}", fn_ty);
+                        let mono_fn_ty = fn_ty.subst(self.tcx, &substs);
+                        println!("### mono_fn_ty {:?}", mono_fn_ty);
+
+                        let rs_ret_ty = self.tcx.erase_late_bound_regions(&mono_fn_ty.fn_ret()).unwrap();
+                        println!("### rs_ret_ty {:?}", rs_ret_ty);
+
+                        let cpp_ret_ty = types::my_cpp_type_of(&mut self.type_data, self.tcx, 
+                                                               &rs_ret_ty, (fi.id, fi.span), false);
+
+                        println!("### cpp_ret_ty {:?}", cpp_ret_ty);
+                        let mut cpp_args = Vec::new();
+                        let fn_args = self.tcx.erase_late_bound_regions(&mono_fn_ty.fn_args());
+                        for (rs_arg_decl, rs_arg_ty) in fn_decl.inputs.iter().zip(fn_args) {
+
+                            let arg_name = match rs_arg_decl.pat.node {
+                                ast::PatIdent(_, ref spi, _) => spi.node.name.as_str(),
+                                _ => panic!("Expected an ident")
+                            };
+                            let cpp_arg_ty = types::my_cpp_type_of(&mut self.type_data, self.tcx, 
+                                                                   &rs_arg_ty, (fi.id, fi.span), true);
+                            println!("### cpp_arg_ty {:?}", cpp_arg_ty);
+                            cpp_args.push(CppParam {
+                                name: arg_name.to_string(),
+                                mutable: false,
+                                ty: Some(cpp_arg_ty.name)
+                            });
+                        }
+
+                        let cpp_fn = CppFn {
+                            name: symbol.clone(),
+                            ret_ty: Some(cpp_ret_ty.name),
+                            arg_idents: cpp_args,
+                            body: body.to_string(),
+                            span: fi.span
+                        };
+
+                        println!("### cpp_fn {:?}", cpp_fn.to_string(&self.tcx.sess));
+
+                        self.fn_decls.insert(cpp_fn.name.clone(), cpp_fn);
+                    }
+                }
+            } 
+        }
+        visit::walk_foreign_item(self, fi) 
+    }
+}
+
+fn get_meta_value_str<'a>(attr: &'a ast::Attribute, name: &str) -> Option<&'a str> {
+    for mi in attr.meta_item_list().unwrap_or(&[]).iter() {
+        if let ast::MetaNameValue(ref key, ref val) = mi.node {
+            if *key == name {
+                if let ast::LitStr(ref is, _) = val.node {
+                    return Some(&**is);
+                }
+            }
+        }
+    }
+    None
 }

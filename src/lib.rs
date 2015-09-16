@@ -1,4 +1,5 @@
 #![feature(plugin_registrar, rustc_private)]
+#![allow(unused)] ////!!!!!!!!
 
 #[macro_use]
 extern crate syntax;
@@ -41,6 +42,9 @@ pub fn plugin_registrar(reg: &mut Registry) {
                                   SyntaxExtension::NormalTT(Box::new(mac::expand_cpp),
                                                             None, false));
 
-    reg.register_lint_pass(Box::new(lint::CppLintPass));
+    //reg.register_lint_pass(Box::new(lint::CppLintPass));
     reg.register_attribute(format!("cpp_type"), AttributeType::Whitelisted);
+    reg.register_attribute(format!("cpp_wrapper"), AttributeType::Whitelisted);
+
+    reg.register_codegen_pass(Box::new(lint::CppCodegenPass));
 }

@@ -10,7 +10,7 @@ use syntax::codemap::Span;
 
 use rustc::middle::ty::*;
 use rustc::middle::def_id::DefId;
-use rustc::lint::{Context, Level};
+//use rustc::lint::{Context, Level};
 
 declare_lint!(pub BAD_CXX_TYPE, Warn, "Unable to translate type to C++");
 
@@ -60,16 +60,16 @@ impl TypeData {
         }
     }
 
-    pub fn to_cpp(&mut self, cx: &Context) -> String {
+    pub fn to_cpp(&mut self, tcx: &ctxt) -> String {
         while self.queue.len() != 0 {
             let mut todo = Vec::new();
             mem::swap(&mut todo, &mut self.queue);
 
             // Run each of the callbacks, and report any errors
             for cb in todo {
-                let mut tn = cb.run(self, cx.tcx);
+                let mut tn = cb.run(self, tcx);
                 tn.recover();
-                tn.into_name(cx);
+                //tn.into_name(cx);
             }
         }
         // XXX Process queue here
@@ -92,7 +92,7 @@ struct TypeNameProblem {
 
 #[derive(Debug, Clone)]
 pub struct TypeName {
-    name: String,
+    pub name: String,
     warn: Vec<TypeNameProblem>,
     err: Vec<TypeNameProblem>,
 }
@@ -122,53 +122,53 @@ impl TypeName {
         }
     }
 
-    pub fn into_name(self, cx: &Context) -> String {
-        if self.err.len() == 0 {
-            for warn in &self.warn {
-                if cx.current_level(BAD_CXX_TYPE) != Level::Allow {
-                    if let Some(span) = warn.span {
-                        cx.span_lint(BAD_CXX_TYPE, span, &warn.msg);
-                    } else {
-                        cx.lint(BAD_CXX_TYPE, &warn.msg);
-                    }
+    // pub fn into_name(self, cx: &Context) -> String {
+    //     if self.err.len() == 0 {
+    //         for warn in &self.warn {
+    //             if cx.current_level(BAD_CXX_TYPE) != Level::Allow {
+    //                 if let Some(span) = warn.span {
+    //                     cx.span_lint(BAD_CXX_TYPE, span, &warn.msg);
+    //                 } else {
+    //                     cx.lint(BAD_CXX_TYPE, &warn.msg);
+    //                 }
 
-                    cx.sess().note("C++ code will recieve an opaque reference");
+    //                 cx.sess().note("C++ code will recieve an opaque reference");
 
-                    for note in &warn.notes {
-                        if let Some(span) = note.span {
-                            cx.sess().span_note(span, &note.msg);
-                        } else {
-                            cx.sess().note(&note.msg);
-                        }
-                    }
-                }
-            }
-        } else {
-            for err in &self.err {
-                if let Some(span) = err.span {
-                    cx.sess().span_err(span, &err.msg);
-                } else {
-                    cx.sess().err(&err.msg);
-                }
+    //                 for note in &warn.notes {
+    //                     if let Some(span) = note.span {
+    //                         cx.sess().span_note(span, &note.msg);
+    //                     } else {
+    //                         cx.sess().note(&note.msg);
+    //                     }
+    //                 }
+    //             }
+    //         }
+    //     } else {
+    //         for err in &self.err {
+    //             if let Some(span) = err.span {
+    //                 cx.sess().span_err(span, &err.msg);
+    //             } else {
+    //                 cx.sess().err(&err.msg);
+    //             }
 
-                cx.sess().note("This type can't be passed by value, and thus \
-                                is an invalid return type");
+    //             cx.sess().note("This type can't be passed by value, and thus \
+    //                             is an invalid return type");
 
-                for note in &err.notes {
-                    if let Some(span) = note.span {
-                        cx.sess().span_note(span, &note.msg);
-                    } else {
-                        cx.sess().note(&note.msg);
-                    }
-                }
-            }
+    //             for note in &err.notes {
+    //                 if let Some(span) = note.span {
+    //                     cx.sess().span_note(span, &note.msg);
+    //                 } else {
+    //                     cx.sess().note(&note.msg);
+    //                 }
+    //             }
+    //         }
 
-            // Don't bother reporting warnings if we are going to fail
-            // Just report the errors
-        }
+    //         // Don't bother reporting warnings if we are going to fail
+    //         // Just report the errors
+    //     }
 
-        self.name
-    }
+    //     self.name
+    // }
 
     pub fn with_note(mut self, msg: String, span: Option<Span>) -> TypeName {
         for warn in &mut self.warn {
@@ -301,6 +301,23 @@ pub fn cpp_type_of<'tcx>(td: &mut TypeData,
     cpp_type_of_internal(td, tcx, (expr.id, expr.span), rs_ty, is_arg)
 }
 
+pub fn my_cpp_type_of<'tcx>(td: &mut TypeData,
+                         tcx: &ctxt<'tcx>,
+                         rs_ty: &Ty<'tcx>,
+                         nid: (NodeId, Span),
+                         is_arg: bool) -> TypeName {
+    if !is_arg {
+        // Special case for void return value
+        if let TyTuple(ref it) = rs_ty.sty {
+            if it.len() == 0 {
+                return TypeName::from_str("void");
+            }
+        }
+    }
+
+    cpp_type_of_internal(td, tcx, nid, rs_ty, is_arg)
+}
+
 fn cpp_type_of_internal<'tcx>(td: &mut TypeData,
                               tcx: &ctxt<'tcx>,
                               nid: (NodeId, Span),
@@ -329,7 +346,8 @@ fn cpp_type_of_internal<'tcx>(td: &mut TypeData,
         TyBox(ref ty) => {
             // We need to know if the type is Sized.
             // !Sized pointers are twice as wide as Sized pointers.
-            if ty.is_sized(&ParameterEnvironment::for_item(tcx, nid.0), nid.1) {
+            // !!! ParameterEnvironment::for_item doesn't work for foreign items...
+            if true /*ty.is_sized(&ParameterEnvironment::for_item(tcx, nid.0), nid.1)*/ {
                 // We try to get the internal type - if that doesn't work out it's OK
                 let mut cpp_ty = cpp_type_of_internal(td, tcx, nid, ty, true);
 

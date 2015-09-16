@@ -10,6 +10,7 @@ use syntax::ext::base::{MacResult, ExtCtxt, DummyResult, MacEager};
 use syntax::ext::build::AstBuilder;
 use syntax::parse::token::{self, InternedString};
 use syntax::ptr::*;
+use syntax::owned_slice::OwnedSlice;
 
 use uuid::Uuid;
 
@@ -96,14 +97,14 @@ pub fn expand_cpp<'a>(ec: &'a mut ExtCtxt,
             return DummyResult::expr(mac_span);
         }
     }
-
+/*
     // Check if we are looking at an ->
     let ret_ty = if parser.eat(&token::RArrow).unwrap() {
         parser.parse_ty()
     } else {
         ec.ty(mac_span, TyTup(Vec::new()))
     };
-
+*/
     // Read in the body
     let body_tt = parser.parse_token_tree().unwrap();
     parser.expect(&token::Eof).unwrap();
@@ -126,15 +127,19 @@ pub fn expand_cpp<'a>(ec: &'a mut ExtCtxt,
 
 
     // Generate the rust parameters and arguments
-    let params: Vec<_> = captured_idents.iter().map(|&(ref id, mutable)| {
-        let arg_ty = ec.ty_ptr(mac_span,
-                               ec.ty_ident(mac_span,
-                                           Ident::new(intern("u8"))),
-                               mutable);
+    let mut typarams: Vec<_> = captured_idents.iter().enumerate().map(|(i,&(ref id, mutable))| {
+        ec.typaram(mac_span, Ident::new(intern(&format!("T{}",i))), OwnedSlice::empty(), None)
+    }).collect();
+    typarams.push(ec.typaram(mac_span, Ident::new(intern("TR")), OwnedSlice::empty(), None));
+
+    let params: Vec<_> = captured_idents.iter().enumerate().map(|(i,&(ref id, mutable))| {
+        let arg_ty = ec.ty_ident(mac_span, Ident::new(intern(&format!("T{}", i))));
         ec.arg(mac_span, id.clone(), arg_ty)
     }).collect();
 
     let args: Vec<_> = captured_idents.iter().map(|&(ref id, mutable)| {
+        ec.expr_ident(mac_span, id.clone())
+        /*
         let arg_ty = ec.ty_ptr(mac_span,
                                ec.ty_ident(mac_span,
                                            Ident::new(intern("u8"))),
@@ -153,19 +158,44 @@ pub fn expand_cpp<'a>(ec: &'a mut ExtCtxt,
                                             ec.ty_infer(mac_span),
                                             mutable)),
                      arg_ty)
+        */
     }).collect();
 
     let fn_ident = Ident::new(intern(
         &format!("rust_cpp_{}", Uuid::new_v4().to_simple_string())));
 
+    let body: &'static str = unsafe {::std::mem::transmute(&body_str as &str)};
+    let fn_attrs = vec![
+                    ec.attribute(
+                        mac_span,
+                        ec.meta_list(
+                            mac_span,
+                            InternedString::new("cpp_wrapper"),
+                            vec![
+                                ec.meta_name_value(
+                                    mac_span,
+                                    InternedString::new("body"),
+                                    LitStr(InternedString::new(body),
+                                           CookedStr))
+                                ]))
+                    ];
+
     // extern "C" declaration of function
     let foreign_mod = ForeignMod {
-        abi: abi::C,
+        abi: abi::CGeneric,
         items: vec![P(ForeignItem {
             ident: fn_ident.clone(),
-            attrs: Vec::new(),
-            node: ForeignItemFn(ec.fn_decl(params, ret_ty),
-                                empty_generics()),
+            attrs: fn_attrs,
+            node: ForeignItemFn(ec.fn_decl(params, ec.ty_ident(mac_span,
+                                                               Ident::new(intern("TR")))),
+                                    Generics {
+                                        lifetimes: Vec::new(),
+                                        ty_params: OwnedSlice::from_vec(typarams),
+                                        where_clause: WhereClause {
+                                            id: DUMMY_NODE_ID,
+                                            predicates: Vec::new(),
+                                        }
+                                    }),
             id: DUMMY_NODE_ID,
             span: mac_span,
             vis: Inherited,

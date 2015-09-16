@@ -22,16 +22,17 @@ pub struct CppParam {
 impl CppParam {
     pub fn to_string(&self) -> String {
         let mut s = String::new();
-        if !self.mutable {
-            s.push_str("const ");
-        }
+        // if !self.mutable {
+        //     s.push_str("const ");
+        // }
 
         if let Some(ref ty) = self.ty {
             s.push_str(ty);
         } else {
             s.push_str("void");
         }
-        s.push_str("& ");
+        //s.push_str("& ");
+        s.push_str(" ");
 
         s.push_str(&self.name);
 
