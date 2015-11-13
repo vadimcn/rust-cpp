@@ -8,6 +8,7 @@ use syntax::ast::*;
 use syntax::ast_util::empty_generics;
 use syntax::ext::base::{MacResult, ExtCtxt, DummyResult, MacEager};
 use syntax::ext::build::AstBuilder;
+use syntax::fold::Folder;
 use syntax::parse::token::{self, InternedString};
 use syntax::ptr::*;
 
@@ -78,10 +79,33 @@ pub fn expand_cpp_flags<'a>(ec: &'a mut ExtCtxt,
     MacEager::items(SmallVector::zero())
 }
 
+pub fn expand_cpp_generic<'a>(ec: &'a mut ExtCtxt,
+                      mac_span: Span,
+                      tts: &[TokenTree]) -> Box<MacResult + 'a> {
+    println!("### Expanding cpp_generic");
+    let mut parser = ec.new_parser_from_tts(tts);
+    parser.parse_ident();
+    let tts = parser.parse_token_tree().unwrap();
+    let mut items = SmallVector::zero();
+    while !parser.check(&token::Eof) {
+        let item = parser.parse_item_panic().unwrap();
+        items.extend(ec.expander().fold_item(item).into_iter());
+    }
+    println!("### Done cpp_generic");
+    MacEager::items(items)
+}
+
+pub fn expand_cpp_impl<'a>(ec: &'a mut ExtCtxt,
+                      mac_span: Span,
+                      tts: &[TokenTree]) -> Box<MacResult + 'a> {
+    DummyResult::any(mac_span)
+}
+
 pub fn expand_cpp<'a>(ec: &'a mut ExtCtxt,
                       mac_span: Span,
                       tts: &[TokenTree])
                       -> Box<MacResult + 'a> {
+    println!("### Expanding cpp");
     let mut parser = ec.new_parser_from_tts(tts);
     let mut captured_idents = Vec::new();
 

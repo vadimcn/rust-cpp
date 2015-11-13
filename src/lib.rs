@@ -46,6 +46,14 @@ pub fn plugin_registrar(reg: &mut Registry) {
                                   SyntaxExtension::NormalTT(Box::new(mac::expand_cpp_flags),
                                                             None,
                                                             false));
+    reg.register_syntax_extension(intern("cpp_generic"),
+                                  SyntaxExtension::NormalTT(Box::new(mac::expand_cpp_generic),
+                                                            None,
+                                                            false));
+    reg.register_syntax_extension(intern("cpp_impl"),
+                                  SyntaxExtension::NormalTT(Box::new(mac::expand_cpp_impl),
+                                                            None,
+                                                            false));                                                                
     reg.register_syntax_extension(intern("cpp"),
                                   SyntaxExtension::NormalTT(Box::new(mac::expand_cpp),
                                                             None,
